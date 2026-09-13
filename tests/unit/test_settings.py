@@ -123,3 +123,10 @@ def test_sync_max_bytes_above_file_cap_rejected() -> None:
     kwargs["sync_max_bytes"] = 99_999_999
     with pytest.raises(ValidationError, match="OCR_SYNC_MAX_BYTES"):
         Settings(**kwargs)
+
+
+def test_metric_interval_is_milliseconds() -> None:
+    kwargs = base_kwargs()
+    kwargs["OTEL_METRIC_EXPORT_INTERVAL"] = "60000"
+    settings = Settings(**kwargs)
+    assert settings.metric_interval_ms == 60_000  # 60s, not 60µs

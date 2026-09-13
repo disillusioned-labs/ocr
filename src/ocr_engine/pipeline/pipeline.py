@@ -7,6 +7,7 @@ stored but its event is not written.
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
@@ -15,6 +16,13 @@ from ..extraction.extract import extract_fields
 from ..extraction.schema import Schema
 from ..extraction.validate import build_result
 from ..obs.logging import get_logger
+from ..obs.metrics import (
+    DOCUMENTS_FAILED,
+    DOCUMENTS_PROCESSED,
+    OCR_LINES,
+    PIPELINE_DURATION,
+    PROVIDER_ATTR,
+)
 from ..obs.tracing import tracer
 from ..ocr.baidu import ProviderPermanentError, ProviderTransientError
 from ..ocr.base import Line
@@ -48,6 +56,8 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> None:
         return
 
     await store.mark_processing(doc.id)
+    started = time.perf_counter()
+    provider_name = settings.provider.value
 
     with tracer("pipeline.process").start_as_current_span("process_document") as span:
         span.set_attribute("ocr.document_id", document_id)
@@ -65,8 +75,11 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> None:
             meta = _inspect(content, settings)
 
             lines = inspect_file.digitalborn_lines(content)
-            if lines is None:
+            if lines is not None:
+                OCR_LINES.record(len(lines), {PROVIDER_ATTR: "digitalborn"})
+            else:
                 lines = await _ocr_lines(provider, content, meta.mime, settings, semaphore)
+                OCR_LINES.record(len(lines), {PROVIDER_ATTR: provider_name})
 
             schema = schemas.get(doc.doc_type)
             if schema is None:
@@ -92,19 +105,23 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> None:
                 fields=len(result.fields),
                 avg_confidence=round(result.avg_confidence, 3),
             )
+            DOCUMENTS_PROCESSED.add(1, {"status": status})
+            PIPELINE_DURATION.record(
+                time.perf_counter() - started, {PROVIDER_ATTR: provider_name, "outcome": "ok"}
+            )
 
         except DocumentFailed as exc:
-            await _fail(store, doc, settings, exc.code, exc.message)
+            await _fail(store, doc, settings, exc.code, exc.message, provider_name, started)
         except ProviderTransientError as exc:
             raise _TransientJobError(str(exc)) from exc
         except ProviderPermanentError as exc:
-            await _fail(store, doc, settings, "INTERNAL", str(exc))
+            await _fail(store, doc, settings, "INTERNAL", str(exc), provider_name, started)
         except inspect_file.UnsupportedFileType as exc:
-            await _fail(store, doc, settings, "UNSUPPORTED_FILE_TYPE", str(exc))
+            await _fail(store, doc, settings, "UNSUPPORTED_FILE_TYPE", str(exc), provider_name, started)
         except inspect_file.ResourceLimit as exc:
-            await _fail(store, doc, settings, "RESOURCE_LIMIT", str(exc))
+            await _fail(store, doc, settings, "RESOURCE_LIMIT", str(exc), provider_name, started)
         except Exception as exc:
-            await _fail(store, doc, settings, "INTERNAL", str(exc))
+            await _fail(store, doc, settings, "INTERNAL", str(exc), provider_name, started)
             raise
         finally:
             download.cleanup_temp(tmp_path)
@@ -135,7 +152,15 @@ async def _ocr_lines(provider, content: bytes, mime: str, settings: Settings, se
         return await provider.extract_lines(inspect_file.downscale_if_needed(content, settings), mime)
 
 
-async def _fail(store: Store, doc: DocumentRow, settings: Settings, code: str, message: str) -> None:
+async def _fail(
+    store: Store,
+    doc: DocumentRow,
+    settings: Settings,
+    code: str,
+    message: str,
+    provider_name: str,
+    started: float,
+) -> None:
     await store.finish_document(
         doc.id,
         status="failed",
@@ -153,3 +178,8 @@ async def _fail(store: Store, doc: DocumentRow, settings: Settings, code: str, m
         trace_id=doc.trace_id,
     )
     log.warning("document failed", document_id=str(doc.id), error_code=code)
+    DOCUMENTS_PROCESSED.add(1, {"status": "failed"})
+    DOCUMENTS_FAILED.add(1, {"error_code": code})
+    PIPELINE_DURATION.record(
+        time.perf_counter() - started, {PROVIDER_ATTR: provider_name, "outcome": "failed"}
+    )

@@ -127,9 +127,15 @@ logged; logs never carry OCR result text (PII) — only counts and confidences.
 Logging is one pipeline for the whole process: structlog output and library
 logs (grpcio, saq, botocore) render identically — JSON with `trace_id`/
 `span_id` when a span is active (`LOG_FORMAT=text` switches to a console
-renderer for development). Tracing pushes over OTLP to the central collector
-(`OTEL_EXPORTER_OTLP_ENDPOINT`, scheme selects TLS); with the endpoint unset
-or `OTEL_SDK_DISABLED=true` the SDK is never installed and spans are no-ops.
+renderer for development). Traces and metrics both push over OTLP to the
+central collector (`OTEL_EXPORTER_OTLP_ENDPOINT`, scheme selects TLS); with
+the endpoint unset or `OTEL_SDK_DISABLED=true` the SDK is never installed
+and recording is a no-op. Instruments: `ocr_rpc_*` (RED per gRPC method),
+`ocr_documents_*` / `ocr_pipeline_duration_seconds` / `ocr_document_lines`
+(per-document pipeline outcomes), `ocr_outbox_*` (outbox delivery) and the
+constant gauge `ocr_process_running` - the liveness signal push telemetry
+needs instead of `up`. Grafana: `Expense Platform - OCR Detail` in
+infra/observability (uid `ocr-detail`).
 
 ## Deployment
 

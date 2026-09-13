@@ -9,6 +9,7 @@ import socket
 from confluent_kafka import Producer
 
 from ..obs.logging import get_logger
+from ..obs.metrics import OUTBOX_FAILED, OUTBOX_PUBLISHED
 from ..repo.store import Store
 
 log = get_logger(__name__)
@@ -24,9 +25,15 @@ TOPIC_HEADERS = (
 )
 
 
-def _delivery_report(err, msg) -> None:
-    if err is not None:
-        log.warning("kafka delivery failed", error=str(err))
+def _on_delivery(topic: str):
+    def report(err, msg) -> None:
+        if err is not None:
+            OUTBOX_FAILED.add(1, {"topic": topic})
+            log.warning("kafka delivery failed", topic=topic, error=str(err))
+        else:
+            OUTBOX_PUBLISHED.add(1, {"topic": topic})
+
+    return report
 
 
 class OutboxPublisher:
@@ -48,7 +55,7 @@ class OutboxPublisher:
                 key=str(row["aggregate_id"]),
                 value=payload if isinstance(payload, bytes) else str(payload).encode(),
                 headers=_headers(row, event),
-                on_delivery=_delivery_report,
+                on_delivery=_on_delivery(topic),
             )
             self.producer.poll(0)
             await self.store.mark_published(row["id"])

@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     # endpoint requires a scheme and the scheme selects TLS.
     otel_endpoint: str | None = Field(None, validation_alias="OTEL_EXPORTER_OTLP_ENDPOINT")
     otel_sdk_disabled: bool = Field(False, validation_alias="OTEL_SDK_DISABLED")
+    # MILLISECONDS per the OTel spec - not a Go duration like the Baidu knobs.
+    metric_interval_ms: int = Field(
+        15_000, validation_alias="OTEL_METRIC_EXPORT_INTERVAL"
+    )
 
     # Sync RPC (ProcessDocument) input cap - interactive callers only; bigger
     # files must go through the queue.
@@ -123,6 +127,8 @@ class Settings(BaseSettings):
             problems.append("OCR_SYNC_MAX_BYTES must be > 0")
         elif self.sync_max_bytes > self.max_file_bytes:
             problems.append("OCR_SYNC_MAX_BYTES must not exceed OCR_MAX_FILE_BYTES")
+        if self.metric_interval_ms <= 0:
+            problems.append("OTEL_METRIC_EXPORT_INTERVAL must be > 0 (milliseconds)")
 
         if self.provider is Provider.BAIDU_AISTUDIO:
             if self.baidu_token is None or not self.baidu_token.get_secret_value():

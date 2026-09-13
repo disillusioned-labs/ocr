@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 import uuid
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from ocr_engine.proto_gen.document.v1 import document_pb2, document_pb2_grpc
 
 from ..events.envelope import build_envelope
 from ..obs.logging import get_logger
+from ..obs.metrics import RPC_DURATION, RPC_REQUESTS
 from ..obs.tracing import tracer
 from ..pipeline.pipeline import process_document
 from ..repo.store import Store
@@ -52,6 +54,22 @@ class _Invalid(Exception):
     pass
 
 
+def _method_name(context) -> str:
+    full = getattr(context, "method", "") or ""
+    return full.rsplit("/", 1)[-1] or "unknown"
+
+
+def _rpc_done(context, status: str, started: float) -> None:
+    method = _method_name(context)
+    RPC_REQUESTS.add(1, {"rpc_method": method, "rpc_grpc_status": status})
+    RPC_DURATION.record(time.perf_counter() - started, {"rpc_method": method})
+
+
+async def _abort(context, code, message, started: float) -> None:
+    _rpc_done(context, code.name, started)
+    await context.abort(code, message)
+
+
 class DocumentServiceServicer(document_pb2_grpc.DocumentServiceServicer):
     def __init__(
         self, store: Store, settings: Settings, schemas: dict, pipeline_ctx: dict | None = None
@@ -67,10 +85,11 @@ class DocumentServiceServicer(document_pb2_grpc.DocumentServiceServicer):
 
     async def SubmitDocument(self, request, context):
         with tracer("api.submit").start_as_current_span("SubmitDocument") as span:
+            started = time.perf_counter()
             try:
                 self._validate_submit(request, span)
             except _Invalid as exc:
-                await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+                await _abort(context, grpc.StatusCode.INVALID_ARGUMENT, str(exc), started)
 
             document_id = uuid.uuid4()
             inserted = await self.store.submit_document(
@@ -87,9 +106,11 @@ class DocumentServiceServicer(document_pb2_grpc.DocumentServiceServicer):
             )
             if not inserted:
                 existing = await self.store.get_idempotent_document(request.idempotency_key)
-                await context.abort(
+                await _abort(
+                    context,
                     grpc.StatusCode.ALREADY_EXISTS,
                     f"document_id={existing.id if existing else 'unknown'}",
+                    started,
                 )
 
             try:
@@ -97,27 +118,31 @@ class DocumentServiceServicer(document_pb2_grpc.DocumentServiceServicer):
             except Exception as exc:
                 await self._rollback(document_id)
                 log.error("enqueue failed; submit rolled back", error=str(exc))
-                await context.abort(grpc.StatusCode.RESOURCE_EXHAUSTED, "queue unavailable")
+                await _abort(context, grpc.StatusCode.RESOURCE_EXHAUSTED, "queue unavailable", started)
 
             span.set_attribute("ocr.document_id", str(document_id))
+            _rpc_done(context, "OK", started)
             return document_pb2.SubmitDocumentResponse(
                 document_id=str(document_id), status=document_pb2.DOCUMENT_STATUS_QUEUED
             )
 
     async def ProcessDocument(self, request, context):
         with tracer("api.submit").start_as_current_span("ProcessDocument") as span:
+            started = time.perf_counter()
             try:
                 self._validate_submit(request, span)
             except _Invalid as exc:
-                await context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+                await _abort(context, grpc.StatusCode.INVALID_ARGUMENT, str(exc), started)
             if request.source.size_bytes > self.settings.sync_max_bytes:
-                await context.abort(
+                await _abort(
+                    context,
                     grpc.StatusCode.FAILED_PRECONDITION,
                     f"size_bytes {request.source.size_bytes} exceeds the synchronous cap "
                     f"({self.settings.sync_max_bytes}); submit via SubmitDocument instead",
+                    started,
                 )
             if self._pipeline_ctx is None:
-                await context.abort(grpc.StatusCode.UNAVAILABLE, "processing not configured")
+                await _abort(context, grpc.StatusCode.UNAVAILABLE, "processing not configured", started)
 
             document_id = uuid.uuid4()
             inserted = await self.store.submit_document(
@@ -137,9 +162,10 @@ class DocumentServiceServicer(document_pb2_grpc.DocumentServiceServicer):
                 # current state instead of re-processing (or ALREADY_EXISTS).
                 existing = await self.store.get_idempotent_document(request.idempotency_key)
                 if existing is None:
-                    await context.abort(grpc.StatusCode.INTERNAL, "idempotent document vanished")
+                    await _abort(context, grpc.StatusCode.INTERNAL, "idempotent document vanished", started)
                 span.set_attribute("ocr.document_id", str(existing.id))
                 span.set_attribute("ocr.idempotent_replay", True)
+                _rpc_done(context, "OK", started)
                 return self._response_for(existing)
 
             try:
@@ -149,16 +175,18 @@ class DocumentServiceServicer(document_pb2_grpc.DocumentServiceServicer):
                 # document (no SAQ job exists to sweep it), so mark it failed
                 # instead of leaving a processing row that never resolves.
                 await self._mark_cancelled(document_id)
+                _rpc_done(context, "CANCELLED", started)
                 raise
             except Exception as exc:
                 log.error("inline processing failed", document_id=str(document_id), error=str(exc))
-                await context.abort(grpc.StatusCode.INTERNAL, "processing failed")
+                await _abort(context, grpc.StatusCode.INTERNAL, "processing failed", started)
 
             doc = await self.store.get_document(document_id)
             if doc is None:
-                await context.abort(grpc.StatusCode.INTERNAL, "document vanished after processing")
+                await _abort(context, grpc.StatusCode.INTERNAL, "document vanished after processing", started)
             span.set_attribute("ocr.document_id", str(document_id))
             span.set_attribute("ocr.status", doc.status)
+            _rpc_done(context, "OK", started)
             return self._response_for(doc)
 
     async def _mark_cancelled(self, document_id: uuid.UUID) -> None:
@@ -198,14 +226,16 @@ class DocumentServiceServicer(document_pb2_grpc.DocumentServiceServicer):
         return response
 
     async def GetDocument(self, request, context):
+        started = time.perf_counter()
         try:
             document_id = uuid.UUID(request.document_id)
         except ValueError:
-            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "document_id is not a UUID")
+            await _abort(context, grpc.StatusCode.INVALID_ARGUMENT, "document_id is not a UUID", started)
 
         doc = await self.store.get_document(document_id)
         if doc is None:
-            await context.abort(grpc.StatusCode.NOT_FOUND, "document not found")
+            await _abort(context, grpc.StatusCode.NOT_FOUND, "document not found", started)
+        _rpc_done(context, "OK", started)
         return self._response_for(doc)
 
     async def _rollback(self, document_id: uuid.UUID) -> None:
