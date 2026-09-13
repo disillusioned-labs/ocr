@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+uv.lock.orig
+
+# Generated protobuf stubs (scripts/generate_proto.py rebuilds them)
+src/ocr_engine/proto_gen/
+
+# Local secrets & scratch
+.env
+.env.local
+*.log
+
+# Experiments / fixtures that are not part of the suite
+/*.png
+/*.jpg
+/*.json
+!tests/fixtures/*.json

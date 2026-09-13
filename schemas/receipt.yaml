@@ -1,0 +1,55 @@
+schema_id: "receipt@1"
+doc_type: receipt
+fields:
+  - name: merchant
+    type: text
+    required: false
+    threshold: 0.7
+    matchers:
+      - kind: positional
+        max_top_n: 3          # the merchant is the first printable block of a receipt
+      - kind: regex
+        pattern: '(?:toko|toko\s+\w+|minimarket|indomaret|alfamart|supermarket|warung|resto|restaurant|kafe|cafe|apothek|apotek|pusat\s+\w+)'
+  - name: date
+    type: date
+    required: false
+    threshold: 0.75
+    matchers:
+      - kind: regex
+        pattern: '(\d{1,4}[./-]\d{1,2}[./-]\d{1,4}(?:[ ,]+\d{1,2}[:.]\d{2}(?:[:.]\d{2})?)?)'
+      - kind: regex
+        pattern: '(\d{1,2}\s*(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|desember|jan|feb|mar|apr|mei|jun|jul|agu|agt|sep|okt|nov|des)\s*\d{2,4})'
+  - name: total
+    type: money
+    required: true
+    threshold: 0.8
+    currency: IDR
+    matchers:
+      - kind: label
+        labels: ["total", "jumlah", "amount due", "grand total", "total belanja", "total harga", "tagihan"]
+        near_right: true
+        label_fuzzy_min: 88
+      - kind: label
+        labels: ["harga jual"]
+        near_right: true
+      - kind: regex
+        pattern: '(?:total|jumlah|tagihan)\s*[:：]?\s*(rp\.?\s*)?([-+]?[\d.,\s]+)'
+  - name: subtotal
+    type: money
+    required: false
+    threshold: 0.7
+    currency: IDR
+    matchers:
+      - kind: label
+        labels: ["subtotal", "sub total", "harga jual", "dpp"]
+        near_right: true
+        label_fuzzy_min: 88
+  - name: tax
+    type: money
+    required: false
+    threshold: 0.7
+    currency: IDR
+    matchers:
+      - kind: label
+        labels: ["ppn", "pajak", "vat", "tax"]
+        near_right: true

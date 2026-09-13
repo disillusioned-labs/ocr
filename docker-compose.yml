@@ -1,0 +1,16 @@
+# Observability stack only - Postgres/Redis/Kafka/storage belong to the shared
+# infra compose (infra/data, infra/messaging). Same pattern as every service.
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: ocr-otel-collector
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./deploy/otel-collector.yaml:/etc/otel/config.yaml:ro
+    networks: [observability]
+    restart: unless-stopped
+
+networks:
+  observability:
+    external: true
+    name: observability

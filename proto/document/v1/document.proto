@@ -1,0 +1,104 @@
+syntax = "proto3";
+
+package document.v1;
+
+option go_package = "github.com/disillusioned-labs/platform/contract/ocr;ocrpb";
+
+// Kontrak B - the internal gRPC hop ocr-gateway -> ocr. This file is the
+// source of truth and lives in the ocr repo; platform/contract/ocr hosts the
+// generated Go code until the gateway switches its import path here.
+// Source: docs/reference/api-ocr.md.
+//
+// The only legitimate caller is ocr-gateway, enforced by network policy plus
+// internal service auth; anyone else gets PERMISSION_DENIED (a security
+// alarm, not an ordinary error).
+service DocumentService {
+  // Async - returns a job reference, not the result. ocr processes in the background.
+  rpc SubmitDocument(SubmitDocumentRequest) returns (SubmitDocumentResponse);
+  // For client polling and the reconciliation sweep (the Kafka event never arrived).
+  rpc GetDocument(GetDocumentRequest) returns (GetDocumentResponse);
+}
+
+message SubmitDocumentRequest {
+  string idempotency_key = 1; // REQUIRED - submit idempotency key; enforced HERE (documents.idempotency_key UNIQUE)
+  string external_ref = 2;    // the caller's business ID - echoed back unchanged on every event
+  string schema_id = 3;       // result of the gateway's mapping: "receipt@1" - the engine knows no business names
+  string caller_id = 4;       // originating caller ("expense", etc.) - for audit AND return routing (echoed in the event)
+  FileSource source = 5;
+}
+
+message FileSource {
+  string bucket = 1;       // the caller's object storage bucket - MUST be listed in ocr's config allowlist
+  string storage_path = 2; // object path in the bucket (not a URL) - read directly with ocr's own READ-ONLY credentials
+  int64 size_bytes = 3;
+  string declared_mime = 4; // a hint only - ocr validates the magic bytes itself
+}
+
+message SubmitDocumentResponse {
+  string document_id = 1;
+  DocumentStatus status = 2; // always QUEUED
+}
+
+message GetDocumentRequest {
+  string document_id = 1;
+}
+
+message GetDocumentResponse {
+  string document_id = 1;
+  DocumentStatus status = 2;
+  DocumentResult result = 3; // null until COMPLETED / NEEDS_REVIEW
+  Error error = 4;           // set when FAILED
+}
+
+enum DocumentStatus {
+  DOCUMENT_STATUS_UNSPECIFIED = 0;
+  DOCUMENT_STATUS_QUEUED = 1;
+  DOCUMENT_STATUS_PROCESSING = 2;
+  DOCUMENT_STATUS_COMPLETED = 3;
+  DOCUMENT_STATUS_NEEDS_REVIEW = 4;
+  DOCUMENT_STATUS_FAILED = 5;
+}
+
+message DocumentResult {
+  string schema_version = 1;
+  double avg_confidence = 2;
+  repeated ExtractedField fields = 3;
+  repeated Issue issues = 4;
+}
+
+message ExtractedField {
+  string name = 1;     // "merchant", "date", "total", ...
+  string value = 2;    // text; money fields use amount + currency instead
+  int64 amount = 3;    // money: integer smallest unit (IDR = whole rupiah)
+  string currency = 4; // ISO 4217, money fields only
+  double confidence = 5;
+  FieldStatus status = 6;
+  BoundingBox bbox = 7; // source-line location in the image - for review UI
+  int32 page = 8;
+}
+
+message BoundingBox {
+  int32 x1 = 1;
+  int32 y1 = 2;
+  int32 x2 = 3;
+  int32 y2 = 4;
+}
+
+enum FieldStatus {
+  FIELD_STATUS_UNSPECIFIED = 0;
+  FIELD_STATUS_EXTRACTED = 1;
+  FIELD_STATUS_LOW_CONFIDENCE = 2;
+  FIELD_STATUS_MISSING = 3;
+  FIELD_STATUS_INVALID = 4; // broken format (unparseable date, etc.)
+}
+
+message Issue {
+  string code = 1;  // LOW_CONFIDENCE | VALIDATION_FAILED | PAGE_UNREADABLE | UNSUPPORTED_FILE_TYPE
+  string field = 2;
+  string detail = 3; // for humans - consumers MUST NOT parse it
+}
+
+message Error {
+  string code = 1;    // UNSUPPORTED_FILE_TYPE | FILE_CORRUPT | STORAGE_OBJECT_MISSING | RESOURCE_LIMIT | INTERNAL
+  string message = 2; // for logging - not for consumers to parse
+}
