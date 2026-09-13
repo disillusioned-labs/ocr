@@ -18,7 +18,9 @@ def build_envelope(
     result: dict | None,
     error: dict | None,
 ) -> dict:
-    return {
+    # data and error are omitted, never null: consumers (expense) treat
+    # "both absent after decode" as a contract violation and dead-letter.
+    envelope: dict = {
         "schema_version": SCHEMA_VERSION,
         "event_id": str(uuid.uuid4()),
         "event_type": EVENT_TYPE,
@@ -28,6 +30,9 @@ def build_envelope(
         "caller_id": doc.caller_id,
         "idempotency_key": doc.idempotency_key,
         "producer": "ocr",
-        "data": result if status in ("completed", "needs_review") else None,
-        "error": error if status == "failed" else None,
     }
+    if status in ("completed", "needs_review"):
+        envelope["data"] = result
+    if status == "failed" and error is not None:
+        envelope["error"] = error
+    return envelope

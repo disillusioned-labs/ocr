@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 
 from ocr_engine.events.envelope import build_envelope
@@ -39,7 +40,7 @@ def test_completed_envelope() -> None:
     assert env["caller_id"] == "expense"
     assert env["idempotency_key"] == doc.idempotency_key
     assert env["data"] == {"fields": []}
-    assert env["error"] is None
+    assert "error" not in env
 
 
 def test_failed_envelope() -> None:
@@ -49,7 +50,7 @@ def test_failed_envelope() -> None:
         result=None,
         error={"code": "FILE_CORRUPT", "message": "bad bytes"},
     )
-    assert env["data"] is None
+    assert "data" not in env
     assert env["error"] == {"code": "FILE_CORRUPT", "message": "bad bytes"}
 
 
@@ -57,5 +58,17 @@ def test_data_and_error_never_coexist() -> None:
     doc = make_doc()
     completed = build_envelope(doc, status="completed", result={}, error={"code": "X", "message": ""})
     failed = build_envelope(doc, status="failed", result={}, error=None)
-    assert completed["data"] == {} and completed["error"] is None
-    assert failed["data"] is None and failed["error"] is None
+    assert completed["data"] == {} and "error" not in completed
+    assert "data" not in failed and "error" not in failed
+
+
+def test_serialized_envelope_decodes_to_exactly_one_of_data_or_error() -> None:
+    # The wire invariant the Go consumer enforces: after JSON decode, exactly
+    # one of data/error is non-nil. A serialized null would decode to nil on
+    # both sides and dead-letter the event.
+    doc = make_doc()
+    completed = build_envelope(doc, status="completed", result={"fields": []}, error=None)
+    failed = build_envelope(doc, status="failed", result=None, error={"code": "INTERNAL", "message": "x"})
+    completed, failed = json.loads(json.dumps(completed)), json.loads(json.dumps(failed))
+    assert (completed["data"] is not None) != (completed.get("error") is not None)
+    assert (failed.get("data") is not None) != (failed["error"] is not None)
