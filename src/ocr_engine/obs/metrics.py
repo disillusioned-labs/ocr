@@ -46,6 +46,11 @@ OCR_LINES = _meter.create_histogram(
     unit="{line}",
     description="OCR lines read per document",
 )
+OCR_PAGES = _meter.create_counter(
+    "ocr.provider.pages",
+    unit="{page}",
+    description="Pages sent to the OCR provider - the daily Baidu quota budget",
+)
 OCR_PROVIDER_DURATION = _meter.create_histogram(
     "ocr.provider.duration",
     unit="s",

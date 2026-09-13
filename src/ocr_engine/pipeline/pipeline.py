@@ -24,6 +24,7 @@ from ..obs.metrics import (
     DOCUMENTS_FAILED,
     DOCUMENTS_PROCESSED,
     OCR_LINES,
+    OCR_PAGES,
     OCR_PROVIDER_DURATION,
     PIPELINE_DURATION,
     PROVIDER_ATTR,
@@ -89,11 +90,12 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> None:
                 OCR_LINES.record(len(lines), {PROVIDER_ATTR: "digitalborn"})
             else:
                 ocr_started = time.perf_counter()
-                lines = await _ocr_lines(provider, content, meta.mime, settings, semaphore)
+                lines, pages = await _ocr_lines(provider, content, meta.mime, settings, semaphore)
                 OCR_PROVIDER_DURATION.record(
                     time.perf_counter() - ocr_started, {PROVIDER_ATTR: provider_name}
                 )
                 OCR_LINES.record(len(lines), {PROVIDER_ATTR: provider_name})
+                OCR_PAGES.add(pages, {PROVIDER_ATTR: provider_name})
 
             schema = schemas.get(doc.doc_type)
             if schema is None:
@@ -160,7 +162,10 @@ def _inspect(content: bytes, settings: Settings):
         raise DocumentFailed("RESOURCE_LIMIT", str(exc)) from None
 
 
-async def _ocr_lines(provider, content: bytes, mime: str, settings: Settings, semaphore) -> list[Line]:
+async def _ocr_lines(
+    provider, content: bytes, mime: str, settings: Settings, semaphore
+) -> tuple[list[Line], int]:
+    """Lines plus page count: pages are the Baidu quota budget (3000/day)."""
 
     async with semaphore:
         if mime == "application/pdf":
@@ -168,8 +173,9 @@ async def _ocr_lines(provider, content: bytes, mime: str, settings: Settings, se
             lines: list[Line] = []
             for image in images:
                 lines.extend(await provider.extract_lines(image, "image/jpeg"))
-            return lines
-        return await provider.extract_lines(inspect_file.downscale_if_needed(content, settings), mime)
+            return lines, len(images)
+        lines = await provider.extract_lines(inspect_file.downscale_if_needed(content, settings), mime)
+        return lines, 1
 
 
 async def _fail(
