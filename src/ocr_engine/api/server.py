@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 
 import grpc
+import httpx
 import saq
 
 from ..api.servicer import DocumentServiceServicer
 from ..obs.logging import get_logger
+from ..ocr.registry import build_provider
 from ..repo.store import Store, create_pool
 from ..settings import Settings
 
@@ -26,7 +29,19 @@ async def serve(settings: Settings, port: int) -> Callable[[], Awaitable[None]]:
     store = Store(pool=pool)
     schemas = load_schemas(settings.schema_dir)
 
-    servicer = DocumentServiceServicer(store, settings, schemas)
+    # ProcessDocument runs the same pipeline the SAQ worker runs, inline in
+    # the request - same deps, same semaphore, one bounded OCR stage.
+    http = httpx.AsyncClient(timeout=settings.baidu_timeout)
+    pipeline_ctx = {
+        "settings": settings,
+        "store": store,
+        "http": http,
+        "schemas": schemas,
+        "provider": build_provider(settings, http),
+        "ocr_semaphore": asyncio.Semaphore(settings.ocr_semaphore),
+    }
+
+    servicer = DocumentServiceServicer(store, settings, schemas, pipeline_ctx)
     servicer.attach_queue(saq.Queue.from_url(settings.redis_url))
 
     health_servicer = health.HealthServicer()
@@ -49,6 +64,7 @@ async def serve(settings: Settings, port: int) -> Callable[[], Awaitable[None]]:
     async def stop() -> None:
         health_servicer.set("", health_pb2.HealthCheckResponse.NOT_SERVING)
         await server.grace(5)
+        await http.aclose()
         await store.close()
         log.info("grpc server stopped")
 

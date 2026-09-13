@@ -115,18 +115,30 @@ Ruff + mypy strict; `make lint typecheck`.
 
 ## Configuration
 
-Every knob is an `OCR_*` environment variable validated at boot — see
-`.env.example` for the full annotated list and
-`docs/explanation/ocr/provider-config.md` for the sync/async decision.
-Secrets (`OCR_BAIDU_TOKEN`, storage keys) are `SecretStr` and never logged;
-logs never carry OCR result text (PII) — only counts and confidences.
+The vocabulary matches the Go services: domain knobs carry the `OCR_` prefix,
+the shared platform knobs (`SERVICE_NAME`, `SERVICE_ENV`, `LOG_LEVEL`,
+`LOG_FORMAT`) and the OpenTelemetry spec names (`OTEL_*`) are unprefixed so
+one deployment mechanism can set the same variable for every service.
+Everything is validated at boot — see `.env.example` for the full annotated
+list and `docs/explanation/ocr/provider-config.md` for the sync/async
+decision. Secrets (`OCR_BAIDU_TOKEN`, storage keys) are `SecretStr` and never
+logged; logs never carry OCR result text (PII) — only counts and confidences.
+
+Logging is one pipeline for the whole process: structlog output and library
+logs (grpcio, saq, botocore) render identically — JSON with `trace_id`/
+`span_id` when a span is active (`LOG_FORMAT=text` switches to a console
+renderer for development). Tracing pushes over OTLP to the central collector
+(`OTEL_EXPORTER_OTLP_ENDPOINT`, scheme selects TLS); with the endpoint unset
+or `OTEL_SDK_DISABLED=true` the SDK is never installed and spans are no-ops.
 
 ## Deployment
 
 `Dockerfile` is multi-stage (uv build → slim runtime, non-root, stubs
 generated at build time). The `baidu_aistudio` image carries no model
-weights by design. `docker-compose.yml` holds only the observability stack;
-Postgres/Redis/Kafka/storage come from the shared `infra/` composes.
+weights by design. `docker-compose.yml` runs the three processes (api,
+worker, outbox) — Postgres/Redis/storage come from `infra/data`, Kafka from
+`infra/messaging`, and traces/metrics push to the one central collector in
+`infra/observability` (there is deliberately no per-service collector).
 Kubernetes grace period must exceed `job_timeout` (300s) so SIGTERM lets
 in-flight jobs finish; killed jobs recover via SAQ heartbeat sweep.
 

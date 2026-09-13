@@ -8,12 +8,19 @@ import signal
 
 from ..api.server import serve
 from ..obs.logging import configure_logging
+from ..obs.tracing import setup_tracing
 from ..settings import get_settings
 
 
 def main() -> None:
     settings = get_settings()
-    configure_logging(settings.log_level, settings.service_name, settings.service_env)
+    configure_logging(settings.log_level, settings.log_format)
+    setup_tracing(
+        settings.otel_endpoint,
+        sdk_disabled=settings.otel_sdk_disabled,
+        service_name=settings.service_name,
+        service_env=settings.service_env,
+    )
     stop = asyncio.Event()
 
     async def run() -> None:

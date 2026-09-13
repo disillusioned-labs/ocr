@@ -7,8 +7,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict, NoDecode
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 SCHEMA_ID_PATTERN = r"^[a-z_]+@[0-9]+$"
 
@@ -80,10 +80,20 @@ class Settings(BaseSettings):
     baidu_token: SecretStr | None = None
     baidu_timeout: float = 90.0
 
-    log_level: str = "info"
-    otel_endpoint: str | None = None
-    service_name: str = "ocr"
-    service_env: str = "development"
+    log_level: str = Field("info", validation_alias=AliasChoices("LOG_LEVEL", "OCR_LOG_LEVEL"))
+    log_format: str = Field("json", validation_alias=AliasChoices("LOG_FORMAT", "OCR_LOG_FORMAT"))
+    # Shared platform vocabulary - unprefixed like the Go services, so one
+    # deployment mechanism can set the same variable for every service.
+    service_name: str = Field("ocr", validation_alias="SERVICE_NAME")
+    service_env: str = Field("development", validation_alias="SERVICE_ENV")
+    # OTEL_* adopts the SDK's own names with the SDK's own meaning: the
+    # endpoint requires a scheme and the scheme selects TLS.
+    otel_endpoint: str | None = Field(None, validation_alias="OTEL_EXPORTER_OTLP_ENDPOINT")
+    otel_sdk_disabled: bool = Field(False, validation_alias="OTEL_SDK_DISABLED")
+
+    # Sync RPC (ProcessDocument) input cap - interactive callers only; bigger
+    # files must go through the queue.
+    sync_max_bytes: int = 10_485_760
 
     @model_validator(mode="after")
     def _validate(self) -> Settings:
@@ -100,6 +110,19 @@ class Settings(BaseSettings):
             problems.append("OCR_WORKER_CONCURRENCY must be > 0")
         if not self.schema_dir.is_dir():
             problems.append(f"OCR_SCHEMA_DIR does not exist: {self.schema_dir}")
+        if self.log_level.upper() not in {"DEBUG", "INFO", "WARNING", "ERROR"}:
+            problems.append("LOG_LEVEL must be one of debug|info|warning|error")
+        if self.log_format not in {"json", "text"}:
+            problems.append("LOG_FORMAT must be one of json|text")
+        if self.otel_endpoint and not self.otel_endpoint.startswith(("http://", "https://")):
+            problems.append(
+                "OTEL_EXPORTER_OTLP_ENDPOINT requires a scheme - the scheme selects TLS "
+                "(http:// locally, https:// in production)"
+            )
+        if self.sync_max_bytes <= 0:
+            problems.append("OCR_SYNC_MAX_BYTES must be > 0")
+        elif self.sync_max_bytes > self.max_file_bytes:
+            problems.append("OCR_SYNC_MAX_BYTES must not exceed OCR_MAX_FILE_BYTES")
 
         if self.provider is Provider.BAIDU_AISTUDIO:
             if self.baidu_token is None or not self.baidu_token.get_secret_value():

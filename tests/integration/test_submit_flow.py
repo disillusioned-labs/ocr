@@ -22,7 +22,7 @@ async def store():
 
     try:
         pool = await create_pool(DSN, min_size=1, max_size=2, timeout=3)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pytest.skip(f"Postgres not reachable at {DSN}")
     try:
         yield Store(pool=pool)
@@ -133,7 +133,10 @@ async def test_failed_document_carries_error_envelope(store):
         avg_confidence=None,
         error_code="STORAGE_OBJECT_MISSING",
         error_message="bucket/object",
-        payload=build_envelope(doc, status="failed", result=None, error={"code": "STORAGE_OBJECT_MISSING", "message": "bucket/object"}),
+        payload=build_envelope(
+            doc, status="failed", result=None,
+            error={"code": "STORAGE_OBJECT_MISSING", "message": "bucket/object"},
+        ),
         topic="ocr.document.processed.v1",
         trace_id=None,
     )

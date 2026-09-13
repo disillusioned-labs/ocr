@@ -17,6 +17,12 @@ service DocumentService {
   rpc SubmitDocument(SubmitDocumentRequest) returns (SubmitDocumentResponse);
   // For client polling and the reconciliation sweep (the Kafka event never arrived).
   rpc GetDocument(GetDocumentRequest) returns (GetDocumentResponse);
+  // Synchronous processing: the same pipeline runs inline and the response
+  // carries the terminal status - for interactive clients that cannot wait
+  // on Kafka. Small inputs only (declared size > OCR_SYNC_MAX_BYTES is
+  // rejected with FAILED_PRECONDITION; use SubmitDocument). The client
+  // deadline must exceed the OCR stage's worst case (~60s per page).
+  rpc ProcessDocument(SubmitDocumentRequest) returns (GetDocumentResponse);
 }
 
 message SubmitDocumentRequest {

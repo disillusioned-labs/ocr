@@ -1,16 +1,70 @@
-# Observability stack only - Postgres/Redis/Kafka/storage belong to the shared
-# infra compose (infra/data, infra/messaging). Same pattern as every service.
+# The ocr processes. Postgres/Redis/storage belong to infra/data, Kafka to
+# infra/messaging, and the OTel collector to infra/observability - there is
+# deliberately no per-service collector here: it would be a second ingest
+# path for the same data the central collector already receives.
+#
+# Base configuration comes from .env; .env.compose only swaps addresses for
+# the compose networks (same pattern as every service).
 services:
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
-    container_name: ocr-otel-collector
-    command: ["--config=/etc/otel/config.yaml"]
-    volumes:
-      - ./deploy/otel-collector.yaml:/etc/otel/config.yaml:ro
-    networks: [observability]
+  api:
+    container_name: ocr-api
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    env_file:
+      - .env
+      - .env.compose
+    entrypoint: ["ocr-api"]
+    ports:
+      - "9094:9094"
+    networks:
+      - data
+      - messaging
+      - observability
+    restart: unless-stopped
+
+  worker:
+    container_name: ocr-worker
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    env_file:
+      - .env
+      - .env.compose
+    entrypoint: ["ocr-worker"]
+    networks:
+      - data
+      - messaging
+      - observability
+    restart: unless-stopped
+
+  outbox:
+    container_name: ocr-outbox
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    env_file:
+      - .env
+      - .env.compose
+    entrypoint: ["ocr-outbox"]
+    networks:
+      - data
+      - messaging
+      - observability
     restart: unless-stopped
 
 networks:
+  data:
+    external: true
+    name: data
+
+  messaging:
+    external: true
+    name: messaging
+
   observability:
     external: true
     name: observability
