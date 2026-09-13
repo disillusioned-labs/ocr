@@ -46,6 +46,45 @@ OCR_LINES = _meter.create_histogram(
     unit="{line}",
     description="OCR lines read per document",
 )
+OCR_PROVIDER_DURATION = _meter.create_histogram(
+    "ocr.provider.duration",
+    unit="s",
+    description="OCR-stage (provider call) duration per document",
+)
+DOCUMENT_CONFIDENCE = _meter.create_histogram(
+    "ocr.document.confidence",
+    description="Average result confidence per document (0-1)",
+)
+DOCUMENT_FIELDS = _meter.create_counter(
+    "ocr.document.fields",
+    unit="{field}",
+    description="Field outcomes per extraction schema field (merchant/date/total/...)",
+)
+DOCUMENT_SIZE = _meter.create_histogram(
+    "ocr.document.size",
+    unit="By",
+    description="Downloaded document size",
+)
+QUEUE_WAIT = _meter.create_histogram(
+    "ocr.pipeline.queue_wait",
+    unit="s",
+    description="Time from submit (created_at) to processing start",
+)
+TRANSIENT_ERRORS = _meter.create_counter(
+    "ocr.pipeline.transient_errors",
+    unit="{error}",
+    description="Transient provider failures - SAQ retries the job",
+)
+PROVIDER_ERRORS = _meter.create_counter(
+    "ocr.provider.errors",
+    unit="{error}",
+    description="Provider failures by class (transient/permanent)",
+)
+OUTBOX_CLAIMED = _meter.create_gauge(
+    "ocr.outbox.claimed",
+    unit="{event}",
+    description="Outbox rows claimed per publisher poll (saturated at the batch size)",
+)
 OUTBOX_PUBLISHED = _meter.create_counter(
     "ocr.outbox.published",
     unit="{event}",
@@ -59,11 +98,18 @@ OUTBOX_FAILED = _meter.create_counter(
 # Push telemetry has no `up`: this constant gauge is the liveness signal -
 # `absent(ocr_process_running)` in a rules file means the process stopped
 # exporting, the same role go_goroutine_count plays for the Go services.
+_PROCESS_ROLE = "api"
 PROCESS_RUNNING = _meter.create_observable_gauge(
     "ocr.process.running",
-    callbacks=[lambda _options: [metrics.Observation(1)]],
+    callbacks=[lambda _options: [metrics.Observation(1, {"ocr_process": _PROCESS_ROLE})]],
     description="Always 1 while the process lives; absence = process gone",
 )
+
+
+def set_process_role(role: str) -> None:
+    """Label the liveness gauge with the binary role (api/worker/outbox)."""
+    global _PROCESS_ROLE
+    _PROCESS_ROLE = role
 
 PROVIDER_ATTR = "ocr_provider"
 

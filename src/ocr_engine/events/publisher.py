@@ -9,7 +9,7 @@ import socket
 from confluent_kafka import Producer
 
 from ..obs.logging import get_logger
-from ..obs.metrics import OUTBOX_FAILED, OUTBOX_PUBLISHED
+from ..obs.metrics import OUTBOX_CLAIMED, OUTBOX_FAILED, OUTBOX_PUBLISHED
 from ..repo.store import Store
 
 log = get_logger(__name__)
@@ -45,6 +45,7 @@ class OutboxPublisher:
 
     async def poll_once(self, batch: int = 100) -> int:
         rows = await self.store.claim_pending_outbox(self.worker_id, batch)
+        OUTBOX_CLAIMED.set(len(rows))
         published = 0
         for row in rows:
             topic = row["topic"] or self.topic_default

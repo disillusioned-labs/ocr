@@ -7,6 +7,7 @@ stored but its event is not written.
 
 from __future__ import annotations
 
+import datetime as dt
 import time
 import uuid
 from typing import Any
@@ -17,11 +18,18 @@ from ..extraction.schema import Schema
 from ..extraction.validate import build_result
 from ..obs.logging import get_logger
 from ..obs.metrics import (
+    DOCUMENT_CONFIDENCE,
+    DOCUMENT_FIELDS,
+    DOCUMENT_SIZE,
     DOCUMENTS_FAILED,
     DOCUMENTS_PROCESSED,
     OCR_LINES,
+    OCR_PROVIDER_DURATION,
     PIPELINE_DURATION,
     PROVIDER_ATTR,
+    PROVIDER_ERRORS,
+    QUEUE_WAIT,
+    TRANSIENT_ERRORS,
 )
 from ..obs.tracing import tracer
 from ..ocr.baidu import ProviderPermanentError, ProviderTransientError
@@ -58,6 +66,7 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> None:
     await store.mark_processing(doc.id)
     started = time.perf_counter()
     provider_name = settings.provider.value
+    QUEUE_WAIT.record(max(0.0, (dt.datetime.now(dt.UTC) - doc.created_at).total_seconds()))
 
     with tracer("pipeline.process").start_as_current_span("process_document") as span:
         span.set_attribute("ocr.document_id", document_id)
@@ -67,6 +76,7 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> None:
             try:
                 tmp_path = await download.download_to_temp(settings, doc.source_bucket, doc.source_path)
                 content = tmp_path.read_bytes()
+                DOCUMENT_SIZE.record(len(content))
             except download.StorageObjectMissing as exc:
                 raise DocumentFailed("STORAGE_OBJECT_MISSING", str(exc)) from None
             except ValueError as exc:
@@ -78,7 +88,11 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> None:
             if lines is not None:
                 OCR_LINES.record(len(lines), {PROVIDER_ATTR: "digitalborn"})
             else:
+                ocr_started = time.perf_counter()
                 lines = await _ocr_lines(provider, content, meta.mime, settings, semaphore)
+                OCR_PROVIDER_DURATION.record(
+                    time.perf_counter() - ocr_started, {PROVIDER_ATTR: provider_name}
+                )
                 OCR_LINES.record(len(lines), {PROVIDER_ATTR: provider_name})
 
             schema = schemas.get(doc.doc_type)
@@ -86,6 +100,9 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> None:
                 raise DocumentFailed("INTERNAL", f"schema {doc.doc_type!r} not loaded")
             extracted = extract_fields(schema, lines)
             result, status = build_result(schema, extracted)
+            DOCUMENT_CONFIDENCE.record(result.avg_confidence, {PROVIDER_ATTR: provider_name})
+            for field in result.fields:
+                DOCUMENT_FIELDS.add(1, {"field": field.name, "status": field.status})
 
             await store.finish_document(
                 doc.id,
@@ -113,8 +130,11 @@ async def process_document(ctx: dict[str, Any], document_id: str) -> None:
         except DocumentFailed as exc:
             await _fail(store, doc, settings, exc.code, exc.message, provider_name, started)
         except ProviderTransientError as exc:
+            TRANSIENT_ERRORS.add(1)
+            PROVIDER_ERRORS.add(1, {"outcome": "transient"})
             raise _TransientJobError(str(exc)) from exc
         except ProviderPermanentError as exc:
+            PROVIDER_ERRORS.add(1, {"outcome": "permanent"})
             await _fail(store, doc, settings, "INTERNAL", str(exc), provider_name, started)
         except inspect_file.UnsupportedFileType as exc:
             await _fail(store, doc, settings, "UNSUPPORTED_FILE_TYPE", str(exc), provider_name, started)

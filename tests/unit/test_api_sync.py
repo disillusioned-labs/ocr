@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import uuid
 from types import SimpleNamespace
 
@@ -76,6 +77,7 @@ def _row(status="completed", result=None) -> DocumentRow:
         error_code=None,
         error_message=None,
         trace_id=None,
+        created_at=dt.datetime.now(dt.UTC),
     )
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import uuid
 from dataclasses import dataclass
@@ -31,12 +32,13 @@ class DocumentRow:
     error_code: str | None
     error_message: str | None
     trace_id: str | None
+    created_at: dt.datetime
 
 
 _ROW_SQL = """
 SELECT id, idempotency_key, external_ref, doc_type, status, caller_id,
        source_bucket, source_path, declared_mime, size_bytes,
-       result, avg_confidence, error_code, error_message, trace_id
+       result, avg_confidence, error_code, error_message, trace_id, created_at
 FROM documents
 """
 
@@ -58,6 +60,7 @@ def _row_to_document(row: asyncpg.Record) -> DocumentRow:
         error_code=row["error_code"],
         error_message=row["error_message"],
         trace_id=row["trace_id"],
+        created_at=row["created_at"],
     )
 
 

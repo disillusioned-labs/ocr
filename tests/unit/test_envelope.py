@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import uuid
 
@@ -26,6 +27,7 @@ def make_doc() -> DocumentRow:
         error_code=None,
         error_message=None,
         trace_id=None,
+        created_at=dt.datetime.now(dt.UTC),
     )
 
 

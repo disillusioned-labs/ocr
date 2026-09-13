@@ -10,7 +10,7 @@ from confluent_kafka import Producer
 
 from ..events.publisher import OutboxPublisher, new_worker_id
 from ..obs.logging import configure_logging
-from ..obs.metrics import setup_metrics
+from ..obs.metrics import set_process_role, setup_metrics
 from ..obs.tracing import setup_tracing
 from ..repo.store import Store, create_pool
 from ..settings import get_settings
@@ -25,6 +25,7 @@ def main() -> None:
         service_name=settings.service_name,
         service_env=settings.service_env,
     )
+    set_process_role("outbox")
     setup_metrics(
         settings.otel_endpoint,
         sdk_disabled=settings.otel_sdk_disabled,

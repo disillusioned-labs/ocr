@@ -8,7 +8,7 @@ import logging
 from saq.worker import Worker
 
 from ..obs.logging import configure_logging
-from ..obs.metrics import setup_metrics
+from ..obs.metrics import set_process_role, setup_metrics
 from ..obs.tracing import setup_tracing
 from ..settings import get_settings
 from ..worker.settings import saq_settings
@@ -23,6 +23,7 @@ def main() -> None:
         service_name=settings.service_name,
         service_env=settings.service_env,
     )
+    set_process_role("worker")
     setup_metrics(
         settings.otel_endpoint,
         sdk_disabled=settings.otel_sdk_disabled,

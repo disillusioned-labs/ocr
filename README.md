@@ -130,12 +130,16 @@ logs (grpcio, saq, botocore) render identically — JSON with `trace_id`/
 renderer for development). Traces and metrics both push over OTLP to the
 central collector (`OTEL_EXPORTER_OTLP_ENDPOINT`, scheme selects TLS); with
 the endpoint unset or `OTEL_SDK_DISABLED=true` the SDK is never installed
-and recording is a no-op. Instruments: `ocr_rpc_*` (RED per gRPC method),
-`ocr_documents_*` / `ocr_pipeline_duration_seconds` / `ocr_document_lines`
-(per-document pipeline outcomes), `ocr_outbox_*` (outbox delivery) and the
-constant gauge `ocr_process_running` - the liveness signal push telemetry
-needs instead of `up`. Grafana: `Expense Platform - OCR Detail` in
-infra/observability (uid `ocr-detail`).
+and recording is a no-op. Instruments: `ocr_rpc_*` (RED per gRPC method);
+`ocr_documents_*`, `ocr_document_fields_total` (per-field extraction
+outcomes), `ocr_document_confidence`, `ocr_document_lines`,
+`ocr_document_size_bytes`, `ocr_pipeline_duration_seconds`,
+`ocr_provider_duration_seconds`, `ocr_pipeline_queue_wait_seconds` and
+`ocr_provider_errors_total` (pipeline quality, latency and queue health);
+`ocr_outbox_*` (outbox delivery); and the constant gauge
+`ocr_process_running{ocr_process=api|worker|outbox}` - the liveness signal
+push telemetry needs instead of `up`. Grafana: `Expense Platform - OCR
+Detail` in infra/observability (uid `ocr-detail`).
 
 ## Deployment
 
