@@ -18,10 +18,19 @@ services:
     entrypoint: ["ocr-api"]
     ports:
       - "9094:9094"
+    healthcheck:
+      test: ["CMD", "python", "/app/scripts/grpc_healthcheck.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     networks:
-      - data
-      - messaging
-      - observability
+      data:
+        # Stable cross-Compose DNS name used by ocr-gateway.
+        aliases:
+          - ocr-grpc
+      messaging: {}
+      observability: {}
     restart: unless-stopped
 
   worker:

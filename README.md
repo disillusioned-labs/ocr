@@ -149,6 +149,12 @@ weights by design. `docker-compose.yml` runs the three processes (api,
 worker, outbox) — Postgres/Redis/storage come from `infra/data`, Kafka from
 `infra/messaging`, and traces/metrics push to the one central collector in
 `infra/observability` (there is deliberately no per-service collector).
+The API Compose health check calls the standard gRPC health service and only
+reports healthy while it returns `SERVING`; the engine is monitored separately
+from the gateway. Worker and outbox liveness is reported by the per-role
+`ocr_process_running` metric and their Uptime Kuma container monitors. Grafana
+provisions a missing-telemetry alert per role (90-second absence plus a
+one-minute pending period).
 Kubernetes grace period must exceed `job_timeout` (300s) so SIGTERM lets
 in-flight jobs finish; killed jobs recover via SAQ heartbeat sweep.
 
